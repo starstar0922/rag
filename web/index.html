@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>企业知识库问答系统</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">企业知识库问答系统</div>
+    <nav>
+      <a class="tab active" data-view="chat" href="#">问答</a>
+      <a class="tab" data-view="docs" href="#">知识库</a>
+      <a class="tab" data-view="eval" href="#">评测</a>
+    </nav>
+    <input id="collection" class="collection" value="default" title="知识库名称" />
+  </header>
+
+  <main>
+    <!-- 问答 -->
+    <section id="view-chat" class="view">
+      <div id="messages" class="messages">
+        <div class="tip">输入问题开始，答案会附带来源引用。</div>
+      </div>
+      <form id="chatForm" class="chat-input">
+        <textarea id="question" rows="2" placeholder="例如：差旅报销的审批流程是什么？"></textarea>
+        <button class="btn" type="submit">发送</button>
+      </form>
+    </section>
+
+    <!-- 知识库 -->
+    <section id="view-docs" class="view hidden">
+      <div class="card">
+        <div id="dropzone" class="dropzone">
+          拖拽文件到此处，或 <button type="button" id="pick" class="link">点击选择</button>
+          <input type="file" id="file" multiple hidden accept=".pdf,.docx,.md,.markdown,.txt" />
+          <div class="muted">支持 PDF / Word / Markdown / TXT</div>
+        </div>
+        <div id="queue"></div>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <h2>文档列表</h2>
+          <button class="btn ghost" id="refresh">刷新</button>
+        </div>
+        <table class="table">
+          <thead><tr><th>名称</th><th>类型</th><th>状态</th><th>分片</th><th></th></tr></thead>
+          <tbody id="docRows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 评测 -->
+    <section id="view-eval" class="view hidden">
+      <div class="card">
+        <div class="row">
+          <label>样本数 <input id="size" type="number" value="20" min="1" /></label>
+          <label class="cb"><input id="useRagas" type="checkbox" checked /> 运行 RAGAS</label>
+          <button class="btn" id="runEval">开始评测</button>
+        </div>
+        <div class="muted">没有自定义数据集时，会基于知识库内容自动生成问答对。</div>
+      </div>
+      <div id="evalResult" class="card"></div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast"></div>
+  <script>window.API = "/api/v1";</script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

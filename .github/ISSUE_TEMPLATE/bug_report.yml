@@ -1,0 +1,33 @@
+name: 缺陷反馈
+description: 记录一个可复现的问题
+title: "[BUG] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: 现象
+      description: 发生了什么？期望结果是什么？
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      value: |
+        1. 上传 xxx.pdf
+        2. 提问 "..."
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: 环境
+      placeholder: Docker / 本地；Python 版本；模型（gpt-4o-mini / deepseek-chat ...）
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志
+      description: docker compose logs app 的相关输出
+      render: shell

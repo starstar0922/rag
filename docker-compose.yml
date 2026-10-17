@@ -1,0 +1,44 @@
+services:
+  # Postgres + pgvector（向量数据库）
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: kb-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: kb
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d kb"]
+      interval: 5s
+      retries: 20
+
+  # 问答服务
+  app:
+    build: .
+    container_name: kb-app
+    restart: unless-stopped
+    # 变量取自宿主机环境或项目根目录的 .env（make init 可生成）
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/kb
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+      DEFAULT_COLLECTION: ${DEFAULT_COLLECTION:-default}
+      TZ: Asia/Shanghai
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./app:/app/app        # 改代码后容器重启即生效
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
