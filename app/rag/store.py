@@ -1,6 +1,8 @@
-"""模型（Embedding / Chat）与向量库（PGVector）的集中创建处。
+"""模型（Embedding / Chat）与向量库（PGVector）的集中创建处：换模型只改这里。
 
-整个项目只有一个地方创建这些对象，方便统一改动（换模型、换向量库只改这里）。
+LangChain 1.x 说明：
+- 模型统一走 langchain-openai（OpenAI 兼容协议，可对接 DeepSeek / 通义 / vLLM 等）
+- 向量库用 langchain-postgres 的 PGVector（Postgres + pgvector）
 """
 
 from functools import lru_cache
@@ -16,8 +18,8 @@ from app.config import Settings, get_settings
 def get_embeddings(settings: Settings | None = None) -> Embeddings:
     """文本向量化模型。
 
-    配置了 OPENAI_API_KEY 就用 OpenAI 兼容接口；
-    没配置则用 LangChain 自带的「假向量」，保证系统能跑通（检索质量无意义，仅用于联调）。
+    配置了 OPENAI_API_KEY 就走真实模型；没配置则用 LangChain 自带的「假向量」，
+    保证系统能跑通（检索质量无意义，仅用于联调）。
     """
     s = settings or get_settings()
     if s.openai_api_key:
@@ -26,9 +28,9 @@ def get_embeddings(settings: Settings | None = None) -> Embeddings:
             api_key=s.openai_api_key,
             base_url=s.openai_base_url,
         )
-    from langchain_community.embeddings import DeterministicFakeEmbedding  # 局部导入，缺依赖也不影响
+    from langchain_community.embeddings import DeterministicFakeEmbedding  # 局部导入，缺依赖也能启动
 
-    return DeterministicFakeEmbedding(size=1536)
+    return DeterministicFakeEmbedding(size=s.embedding_dim)
 
 
 def get_llm(settings: Settings | None = None, streaming: bool = False) -> ChatOpenAI:
@@ -38,7 +40,8 @@ def get_llm(settings: Settings | None = None, streaming: bool = False) -> ChatOp
         model=s.llm_model,
         api_key=s.openai_api_key or "empty",
         base_url=s.openai_base_url,
-        temperature=0,
+        temperature=s.llm_temperature,
+        timeout=s.llm_timeout,
         streaming=streaming,
     )
 
@@ -56,8 +59,7 @@ def get_vectorstore(collection: str):
         use_jsonb=True,
     )
     try:
-        vs.create_tables()   # 幂等：已存在则跳过
-        vs.create_collection()
+        vs.create_collection()  # 幂等：集合已存在则跳过
     except Exception:
         pass
     return vs

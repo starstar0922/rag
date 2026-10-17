@@ -1,21 +1,24 @@
 """问答链（LangChain LCEL）。
 
-create_history_aware_retriever：先用历史把「最新问题」改写成可独立检索的查询（解决代词指代）
-create_retrieval_chain     ：检索 -> 把资料塞进 prompt -> 生成答案
+LangChain 1.x 说明：create_* 系列经典链已迁入 langchain-classic 包：
+  - langchain_classic.chains.create_history_aware_retriever：用历史把「最新问题」改写成可独立检索的查询
+  - langchain_classic.chains.combine_documents.create_stuff_documents_chain：把资料塞进 Prompt 生成答案
+  - langchain_classic.chains.create_retrieval_chain：把上面两步串起来
+提示词默认写在代码里，也可以用 .env 的 SYSTEM_PROMPT_FILE / REWRITE_PROMPT_FILE 指向文件覆盖。
 """
 
 from typing import Any, AsyncIterator
 
-from langchain.chains import create_history_aware_retriever, create_retrieval_chain
-from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain_classic.chains import create_history_aware_retriever, create_retrieval_chain
+from langchain_classic.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
-from app.config import Settings, get_settings
+from app.config import Settings, get_settings, load_prompt
 from app.rag.retrieval import build_retriever
 from app.rag.store import get_llm
 
-SYSTEM_PROMPT = """你是企业知识库问答助手，只依据【参考资料】回答问题。
+DEFAULT_SYSTEM_PROMPT = """你是企业知识库问答助手，只依据【参考资料】回答问题。
 
 规则：
 1. 资料里没有的内容不要编造，直接说明「现有资料无法确定」；
@@ -26,7 +29,7 @@ SYSTEM_PROMPT = """你是企业知识库问答助手，只依据【参考资料�
 【参考资料】
 {context}"""
 
-REWRITE_PROMPT = """结合对话历史，把用户最新的问题改写成一个可以独立理解、适合检索的完整问题。
+DEFAULT_REWRITE_PROMPT = """结合对话历史，把用户最新的问题改写成一个可以独立理解、适合检索的完整问题。
 如果没有对话历史，或原问题已经完整，则原样返回。
 
 对话历史：
@@ -52,10 +55,13 @@ def build_chain(collection: str, settings: Settings | None = None):
     llm = get_llm(s)
     retriever = build_retriever(collection, s)
 
+    system_prompt = load_prompt(s.system_prompt_file, DEFAULT_SYSTEM_PROMPT)
+    rewrite_prompt_text = load_prompt(s.rewrite_prompt_file, DEFAULT_REWRITE_PROMPT)
+
     # 1) 多轮改写：让「那这个呢？」这类问题也能正确检索
     rewrite_prompt = ChatPromptTemplate.from_messages(
         [
-            ("system", REWRITE_PROMPT),
+            ("system", rewrite_prompt_text),
             MessagesPlaceholder("chat_history"),
             ("human", "{input}"),
         ]
@@ -65,7 +71,7 @@ def build_chain(collection: str, settings: Settings | None = None):
     # 2) 问答主链
     qa_prompt = ChatPromptTemplate.from_messages(
         [
-            ("system", SYSTEM_PROMPT),
+            ("system", system_prompt),
             MessagesPlaceholder("chat_history"),
             ("human", "问题：{input}"),
         ]

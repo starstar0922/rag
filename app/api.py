@@ -1,4 +1,4 @@
-"""HTTP 接口：文档上传、检索、问答（流式）、评测。"""
+"""HTTP 接口：文档上传、检索、问答（流式）、评测、配置查看。"""
 
 import uuid
 from pathlib import Path
@@ -17,9 +17,9 @@ from app.schemas import (
     ChatResponse,
     DocumentOut,
     EvalRequest,
+    SearchHit,
     SearchRequest,
     SearchResponse,
-    SearchHit,
     SourceOut,
 )
 
@@ -59,6 +59,30 @@ def health() -> dict:
     }
 
 
+@router.get("/config")
+def config() -> dict:
+    """查看当前生效的配置（来自 .env），密钥已脱敏。"""
+    return {
+        "app_name": settings.app_name,
+        "collection": settings.default_collection,
+        "llm_model": settings.llm_model,
+        "embedding_model": settings.embedding_model,
+        "openai_base_url": settings.openai_base_url,
+        "chunk_size": settings.chunk_size,
+        "chunk_overlap": settings.chunk_overlap,
+        "chunk_separators": settings.chunk_separators,
+        "top_k": settings.top_k,
+        "rerank_top_k": settings.rerank_top_k,
+        "enable_rerank": settings.enable_rerank,
+        "enable_bm25": settings.enable_bm25,
+        "vector_weight": settings.vector_weight,
+        "bm25_weight": settings.bm25_weight,
+        "eval_size": settings.eval_size,
+        "eval_use_ragas": settings.eval_use_ragas,
+        "api_key_configured": bool(settings.api_key),
+    }
+
+
 # ------------------------------------------------------------------ 文档
 @router.post("/documents/upload")
 async def upload_document(
@@ -71,10 +95,14 @@ async def upload_document(
     if suffix not in SUPPORTED_SUFFIXES:
         raise HTTPException(400, f"不支持的文件类型 {suffix}，支持 {sorted(SUPPORTED_SUFFIXES)}")
 
+    content = await file.read()
+    if len(content) > settings.upload_max_bytes:
+        raise HTTPException(413, f"文件超过 {settings.max_upload_mb}MB 上限")
+
     settings.upload_dir.mkdir(parents=True, exist_ok=True)
     safe_name = (file.filename or "upload").replace("/", "_")
     target = settings.upload_dir / f"{uuid.uuid4().hex[:8]}_{safe_name}"
-    target.write_bytes(await file.read())
+    target.write_bytes(content)
 
     if sync:  # 小文件可以同步等待，方便调试
         result = ingest_file(target, collection=collection, original_name=safe_name)
@@ -149,17 +177,13 @@ def chat(req: ChatRequest) -> ChatResponse:
 
 @router.post("/chat/stream")
 async def chat_stream(req: ChatRequest) -> StreamingResponse:
-    async def gen():
-        async for event in astream_answer(req.question, req.collection, req.history):
-            yield f"data: {_json(event)}\n\n"
-
-    return StreamingResponse(gen(), media_type="text/event-stream")
-
-
-def _json(payload: dict) -> str:
     import json  # 局部导入，保持文件简洁
 
-    return json.dumps(payload, ensure_ascii=False)
+    async def gen():
+        async for event in astream_answer(req.question, req.collection, req.history):
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
 
 
 # ------------------------------------------------------------------ 评测

@@ -2,9 +2,23 @@
 
 面向新手的 **极简 RAG 系统**：上传 PDF / Word / Markdown → 自动切分、向量化、存入 Postgres(pgvector) → 提问时做「向量 + BM25」混合检索 → 重排 → 大模型带引用作答 → 可用 RAGAS 一键评测。
 
-**全部核心逻辑都用 LangChain 现成组件拼装**，一共只有 13 个 Python 文件。
+**全部核心逻辑都用 LangChain 现成组件拼装**，一共只有 13 个 Python 文件。**所有配置都从 `.env` 读取**（没有任何硬编码参数）。
 
 > 📖 **新手请看这里**：[`docs/GUIDE.md`](docs/GUIDE.md) 是完整教程——从「怎么跑起来」到「每行代码讲什么」，再到「怎么改、怎么调、怎么排错」。
+
+### 技术栈（全部为当前最新稳定版）
+
+| 组件 | 版本 | 说明 |
+| --- | --- | --- |
+| LangChain | `1.4.x` | 主框架（LCEL） |
+| langchain-classic | `1.0.x` | **LangChain 1.0 起，`create_retrieval_chain` 等经典链迁入此包** |
+| langchain-community | `0.4.x` | Loader / BM25 / Flashrank（官方已宣布 sunset，后续会拆成独立包） |
+| langchain-openai | `1.7.x` | 模型（OpenAI 兼容协议） |
+| langchain-postgres | `0.0.19+` | PGVector 向量库 |
+| FastAPI | `0.143.x` | Web 服务（已用 lifespan 替代废弃的 on_event） |
+| RAGAS | `0.4.x` | 评测（指标名改为 `AnswerRelevancy` / `ContextRecall`…） |
+| Postgres | `pgvector/pgvector:pg16` | 向量数据库 |
+| Python | `3.12` | 镜像内用 `uv` 装依赖（比 pip 快 5~10 倍） |
 
 ---
 
@@ -118,6 +132,18 @@ LLM_MODEL=deepseek-chat
 | `TOP_K` | 8 | 混合检索召回条数 |
 | `RERANK_TOP_K` | 4 | 最终送给模型的资料条数 |
 | `ENABLE_RERANK` | true | 关掉可提速（精度下降） |
+| `ENABLE_BM25` | true | 关掉则只用向量检索 |
+| `VECTOR_WEIGHT` / `BM25_WEIGHT` | 0.5 / 0.5 | 混合检索两路权重；术语多→偏 BM25，口语提问多→偏向量 |
+| `BM25_CACHE_TTL` | 300 | BM25 索引缓存秒数 |
+| `CHUNK_SEPARATORS` | JSON 数组 | 切分分隔符，中文务必保留 `。！？` 等标点 |
+| `PDF_EXTRACT_TABLES` | true | PDF 表格转 Markdown |
+| `LLM_TEMPERATURE` / `LLM_TIMEOUT` | 0 / 60 | 生成温度、超时秒数 |
+| `MAX_UPLOAD_MB` | 100 | 单文件上限 |
+| `EVAL_SIZE` / `EVAL_USE_RAGAS` | 20 / true | 评测样本数、是否跑 RAGAS |
+| `SYSTEM_PROMPT_FILE` | 空 | 用文件覆盖默认提示词 |
+
+> 完整可复制的清单见 [`.env.example`](.env.example)。改完重启：`docker compose restart app`；
+> 想确认有没有生效，访问 `GET /api/v1/config`（密钥已脱敏）。
 
 **新增文档类型**：在 `app/rag/ingest.py` 的 `load_file` 里加一个 `elif suffix == ".xxx": loader = ...`（LangChain 有上百种 Loader）。
 
@@ -128,6 +154,7 @@ LLM_MODEL=deepseek-chat
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/api/v1/health` | 健康检查 |
+| GET | `/api/v1/config` | 查看当前生效的配置（来自 `.env`，密钥脱敏） |
 | POST | `/api/v1/documents/upload` | 上传文档（`collection`、`sync` 参数） |
 | GET | `/api/v1/documents` | 文档列表 |
 | DELETE | `/api/v1/documents/{id}` | 删除文档及分片 |
@@ -182,3 +209,5 @@ git push -u origin feat/rerank-tuning
 | Word 解析为空 | `.doc`（老格式）不支持，另存为 `.docx` |
 | RAGAS 报错 | RAGAS 需要能调用大模型；只想看检索指标用 `--no-ragas` |
 | 换了向量模型后检索异常 | 向量维度变了，需要清空数据：`docker compose down -v` 后重建 |
+| 第一次问答很慢 | Flashrank 首次使用会下载 ~100MB 重排模型；不想要就设 `ENABLE_RERANK=false` |
+| 启动时看到 `langchain-community is being sunset` 警告 | 官方预告的弃用提醒，不影响运行；后续可迁移到独立集成包 |

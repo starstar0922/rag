@@ -1,8 +1,8 @@
 """索引阶段：加载文档 -> 切分 -> 向量化 -> 存入 pgvector。
 
-全部使用 LangChain 现成组件：
-  PyMuPDFLoader（PDF，自动抽取表格）/ Docx2txtLoader（Word）/ TextLoader（Markdown、TXT）
-  RecursiveCharacterTextSplitter（通用递归切分）
+全部使用 LangChain 组件：
+  PyMuPDFLoader（PDF，可抽取表格）/ Docx2txtLoader（Word）/ TextLoader（Markdown、TXT）
+  RecursiveCharacterTextSplitter（递归切分，分隔符来自 .env 的 CHUNK_SEPARATORS）
   PGVector.add_documents（自动完成向量化与入库）
 """
 
@@ -22,14 +22,15 @@ from app.rag.store import get_vectorstore
 SUPPORTED_SUFFIXES = {".pdf", ".docx", ".md", ".markdown", ".txt"}
 
 
-def load_file(path: str | Path) -> list[Document]:
+def load_file(path: str | Path, settings: Settings | None = None) -> list[Document]:
     """按后缀选择 Loader，返回按页/按文档切好的 LangChain Document。"""
+    s = settings or get_settings()
     path = Path(path)
     suffix = path.suffix.lower()
     if suffix == ".pdf":
-        # PyMuPDF 会按顺序输出文本，并尽量把表格转成 Markdown
+        # PyMuPDF 按页输出文本，并可把表格转成 Markdown（开关在 .env：PDF_EXTRACT_TABLES）
         try:
-            loader = PyMuPDFLoader(str(path), extract_tables="markdown")
+            loader = PyMuPDFLoader(str(path), extract_tables="markdown" if s.pdf_extract_tables else None)
         except TypeError:  # 老版本没有 extract_tables 参数
             loader = PyMuPDFLoader(str(path))
     elif suffix == ".docx":
@@ -42,12 +43,12 @@ def load_file(path: str | Path) -> list[Document]:
 
 
 def split_documents(docs: list[Document], settings: Settings | None = None) -> list[Document]:
-    """递归切分：优先按段落/句子切，切不动再按字符切；中文额外按句号等标点切。"""
+    """递归切分：优先按段落/句子切，切不动再按字符切（分隔符可在 .env 配置）。"""
     s = settings or get_settings()
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=s.chunk_size,
         chunk_overlap=s.chunk_overlap,
-        separators=["\n\n", "\n", "。", "！", "？", "；", "，", " ", ""],
+        separators=s.chunk_separators,
     )
     return splitter.split_documents(docs)
 
@@ -77,7 +78,7 @@ def ingest_file(
     )
 
     try:
-        raw_docs = load_file(path)
+        raw_docs = load_file(path, s)
         # PDF 的页码从 0 开始，这里改成从 1 开始，和 PDF 阅读器显示一致
         for d in raw_docs:
             if d.metadata.get("page") is not None:
@@ -98,9 +99,7 @@ def ingest_file(
         vectorstore = get_vectorstore(collection)
         vectorstore.add_documents(chunks)  # 内部自动调用 Embedding 并写入 pgvector
 
-        update_document(
-            document_id, status="ready", chunk_count=len(chunks)
-        )
+        update_document(document_id, status="ready", chunk_count=len(chunks))
         return {
             "document_id": document_id,
             "name": name,

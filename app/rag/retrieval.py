@@ -1,16 +1,16 @@
 """检索阶段：混合检索（向量 + BM25） + 重排。
 
-LangChain 组件：
-  - 向量检索：PGVector.as_retriever()
-  - 稀疏检索：BM25Retriever（用 jieba 做中文分词）
-  - 融合：EnsembleRetriever（倒数排名融合 RRF，两路结果加权合并）
-  - 重排：FlashrankRerank（本地小模型，CPU 可跑），装在 ContextualCompressionRetriever 之上
+LangChain 1.x 组件位置：
+- langchain_classic.retrievers.EnsembleRetriever（1.0 起经典链/检索器迁入 langchain-classic）
+- langchain_community.retrievers.BM25Retriever（jieba 中文分词）
+- langchain_community.document_compressors.flashrank_rerank.FlashrankRerank（本地 CPU 重排）
+权重、条数、缓存时间全部来自 .env（见 app/config.py）。
 """
 
 import time
 from typing import Any
 
-from langchain.retrievers import EnsembleRetriever
+from langchain_classic.retrievers import EnsembleRetriever
 from langchain_community.retrievers import BM25Retriever
 from langchain_core.callbacks import CallbackManagerForRetrieverRun
 from langchain_core.documents import Document
@@ -21,7 +21,6 @@ from app.rag.store import get_vectorstore, load_collection_documents
 
 # BM25 索引缓存：{collection: (构建时间, retriever)}
 _BM25_CACHE: dict[str, tuple[float, BM25Retriever | None]] = {}
-_BM25_TTL = 300  # 秒
 
 
 def chinese_tokenizer(text: str) -> list[str]:
@@ -33,10 +32,13 @@ def chinese_tokenizer(text: str) -> list[str]:
 
 
 def build_bm25_retriever(collection: str, k: int, settings: Settings | None = None) -> BM25Retriever | None:
-    """基于知识库现有分片构建 BM25 索引（带 5 分钟缓存，新增文档后会自动重建）。"""
+    """基于知识库现有分片构建 BM25 索引（带缓存，新增文档后会自动重建）。"""
     s = settings or get_settings()
+    if not s.enable_bm25:
+        return None
+
     cached = _BM25_CACHE.get(collection)
-    if cached and time.time() - cached[0] < _BM25_TTL:
+    if cached and time.time() - cached[0] < s.bm25_cache_ttl:
         retriever = cached[1]
     else:
         docs = load_collection_documents(collection, s)
@@ -78,21 +80,17 @@ class RerankRetriever(BaseRetriever):
 
 
 def build_retriever(collection: str, settings: Settings | None = None) -> BaseRetriever:
-    """向量检索 + BM25 混合，再接重排。"""
+    """向量检索 + BM25 混合（权重来自 .env），再接重排。"""
     s = settings or get_settings()
     vector_retriever = get_vectorstore(collection).as_retriever(search_kwargs={"k": s.top_k})
 
-    retrievers = [vector_retriever]
-    weights = [0.6]
     bm25 = build_bm25_retriever(collection, s.top_k, s)
     if bm25 is not None:
-        retrievers.append(bm25)
-        weights = [0.5, 0.5]
-
-    if len(retrievers) == 1:
-        base: BaseRetriever = vector_retriever
+        base: BaseRetriever = EnsembleRetriever(
+            retrievers=[vector_retriever, bm25], weights=[s.vector_weight, s.bm25_weight]
+        )
     else:
-        base = EnsembleRetriever(retrievers=retrievers, weights=weights)
+        base = vector_retriever
 
     return RerankRetriever(base_retriever=base, top_k=s.rerank_top_k, collection=collection)
 

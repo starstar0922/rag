@@ -1,36 +1,39 @@
-# Web 服务
-fastapi>=0.115
-uvicorn[standard]>=0.32
-python-multipart>=0.0.18
-pydantic-settings>=2.5
+# ============ Web 服务（最新稳定版）============
+fastapi>=0.143
+uvicorn[standard]>=0.38
+python-multipart>=0.0.32
+pydantic-settings>=2.10
 
-# 数据库（Postgres + pgvector）
-sqlalchemy>=2.0
-psycopg[binary]>=3.2
-pgvector>=0.3
+# ============ 数据库（Postgres + pgvector）============
+sqlalchemy>=2.1
+psycopg[binary]>=3.3
+# pgvector 由 langchain-postgres 自动带入（它要求 <0.4），这里不再单独指定
 
-# LangChain 全家桶
-langchain>=0.3,<0.4
-langchain-community>=0.3,<0.4
-langchain-openai>=0.2,<0.3
-langchain-postgres>=0.0.13
-langchain-text-splitters>=0.3,<0.4
+# ============ LangChain 1.x 全家桶 ============
+# langchain 1.0 起，create_retrieval_chain 等经典链迁入 langchain-classic
+langchain>=1.4,<2
+langchain-core>=1.6,<2
+langchain-classic>=1.0,<2
+langchain-community>=0.4,<0.5      # Loader / BM25 / Flashrank（社区包已宣布 sunset，后续会拆成独立包）
+langchain-openai>=1.7,<2
+langchain-postgres>=0.0.19          # PGVector
+langchain-text-splitters>=1.1,<2
 
-# 文档解析
-pymupdf>=1.24
-docx2txt>=0.8
+# ============ 文档解析 ============
+pymupdf>=1.28
+docx2txt>=0.9
 
-# 稀疏检索（BM25）与中文分词
+# ============ 稀疏检索（BM25）与中文分词 ============
 rank-bm25>=0.2.2
 jieba>=0.42
 
-# 重排（本地轻量模型，无需 GPU）
-flashrank>=0.2.6
+# ============ 重排（本地轻量模型，CPU 可跑）============
+flashrank>=0.2.10
 
-# 评测
-ragas>=0.2,<0.3
-datasets>=3.0
+# ============ 评测 ============
+ragas>=0.4,<0.5
+datasets>=5.0
 pandas>=2.2
 
-# 测试
-pytest>=8.3
+# ============ 测试 ============
+pytest>=9.0

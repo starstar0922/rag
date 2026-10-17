@@ -55,11 +55,16 @@ PDF / Word / Markdown ─▶ LangChain Loader ─▶ RecursiveCharacterTextSplit
 | 切分 | `RecursiveCharacterTextSplitter` | `app/rag/ingest.py:44` |
 | 向量化 + 存储 | `OpenAIEmbeddings` + `PGVector.add_documents` | `app/rag/store.py:16`、`app/rag/ingest.py:98` |
 | 稀疏检索 | `BM25Retriever`（jieba 分词） | `app/rag/retrieval.py:35` |
-| 融合 | `EnsembleRetriever`（RRF 倒数排名融合） | `app/rag/retrieval.py:95` |
-| 重排 | `FlashrankRerank`（本地 CPU 小模型） | `app/rag/retrieval.py:51` |
-| 多轮改写 | `create_history_aware_retriever` | `app/rag/chain.py:63` |
-| 生成 | `create_retrieval_chain` + `create_stuff_documents_chain` | `app/rag/chain.py:73` |
-| 评测 | `ragas.evaluate` | `app/rag/evaluate.py:109` |
+| 融合 | `EnsembleRetriever`（RRF 倒数排名融合） | `app/rag/retrieval.py`（`langchain_classic.retrievers`） |
+| 重排 | `FlashrankRerank`（本地 CPU 小模型） | `app/rag/retrieval.py`（`langchain_community.document_compressors`） |
+| 多轮改写 | `create_history_aware_retriever` | `app/rag/chain.py`（`langchain_classic.chains`） |
+| 生成 | `create_retrieval_chain` + `create_stuff_documents_chain` | `app/rag/chain.py`（`langchain_classic.chains`） |
+| 评测 | `ragas.evaluate` | `app/rag/evaluate.py` |
+
+> **LangChain 1.x 迁移要点**：`langchain.chains` / `langchain.retrievers` 已从主包移除，
+> 经典链与融合检索器现在从 **`langchain-classic`** 导入（`langchain_classic.chains`、`langchain_classic.retrievers`）；
+> Loader、BM25、Flashrank 仍在 `langchain-community`（官方已宣布 sunset，只是警告，不影响使用）。
+> 文档里的行号可能随版本微调，以函数名搜索为准。
 
 **目录树**
 
@@ -336,6 +341,8 @@ class Settings(BaseSettings):
 ```
 
 - `BaseSettings`（Pydantic）会自动从**环境变量**或 `.env` 读同名变量，所以 `.env` 里写 `CHUNK_SIZE=1200` 就等于改这个字段。
+- **项目里没有任何硬编码参数**：切分长度、TopK、权重、提示词、目录、鉴权……全部在这里声明，全部可由 `.env` 覆盖。
+- 想确认线上到底用了哪套配置：访问 `GET /api/v1/config`（密钥自动脱敏）。
 - `get_settings()` 上加了 `@lru_cache(maxsize=1)`：整个进程只读一次配置，避免重复解析文件，并保证 `data/` 目录只创建一次。
 - 想加配置：在这里加一行 `my_flag: bool = False`，然后 `.env` 里写 `MY_FLAG=true` 即可。
 
@@ -527,8 +534,11 @@ def build_bm25_retriever(collection: str, k: int, settings: Settings | None = No
 | --- | --- | --- |
 | `faithfulness` 忠实度 | 答案是不是只用了资料里的内容 | 模型在编（换更强的模型 / 收紧 Prompt） |
 | `answer_relevancy` 答案相关性 | 答案是否切题 | 答非所问（检查改写或切分） |
-| `context_recall` 上下文召回 | 标准答案所需信息是否被检索到 | **检索不好**（加大 top_k、加混合检索） |
-| `context_precision` 上下文精确率 | 召回回来的有多少是有用的 | 噪声多（加重排、减小 top_k） |
+| `context_recall` 上下文召回 | 标准答案所需信息是否被检索到 | **检索不好**（加大 `TOP_K`、开启 BM25） |
+| `context_precision` 上下文精确率 | 召回回来的有多少是有用的 | 噪声多（开启重排、减小 `TOP_K`） |
+
+> RAGAS 0.4 的指标类名变了：`ResponseRelevancy → AnswerRelevancy`、`LLMContextRecall → ContextRecall`、
+> `LLMContextPrecisionWithReference → ContextPrecisionWithReference`，且要从 **`ragas.metrics.collections`** 导入。
 
 **看指标定位问题的口诀**：召回低 → 改检索；精确率低 → 加重排/调切分；忠实度低 → 改 Prompt/换模型。
 
@@ -550,7 +560,11 @@ def build_bm25_retriever(collection: str, k: int, settings: Settings | None = No
 | `TOP_K` | 8 | 召回候选数，越大召回越全但噪声越多 | 5～15 |
 | `RERANK_TOP_K` | 4 | 真正送进模型的条数，超了会挤爆上下文 | 3～6 |
 | `ENABLE_RERANK` | true | 关掉能提速约 30%，精度下降 | 先开，性能瓶颈再关 |
-| 融合权重 | 0.5/0.5 | 在 `app/rag/retrieval.py:90` | 术语多→偏 BM25；口语提问多→偏向量 |
+| `ENABLE_BM25` | true | 关掉只剩向量检索 | 纯语义问答可关 |
+| `VECTOR_WEIGHT` / `BM25_WEIGHT` | 0.5 / 0.5 | 融合权重（在 `app/rag/retrieval.py` 的 `build_retriever`） | 术语多→偏 BM25；口语提问多→偏向量 |
+| `CHUNK_SEPARATORS` | JSON 数组 | 切分分隔符 | 中文务必保留 `。！？；，` |
+| `LLM_TEMPERATURE` | 0 | 越大越发散 | 问答场景保持 0 |
+| `EVAL_SIZE` / `EVAL_USE_RAGAS` | 20 / true | 评测默认参数 | 只想看检索指标就关 RAGAS |
 
 **改动有没有效，别靠感觉**：改之前跑一次 `python -m scripts.evaluate`，改之后再跑一次，对比 `hit_rate` 和 `mrr`。
 

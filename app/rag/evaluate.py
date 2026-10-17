@@ -1,12 +1,14 @@
-"""评测：RAGAS（生成质量） + 离线检索指标（召回质量）。
+"""评测：RAGAS 0.4（生成质量） + 离线检索指标（召回质量）。
 
 流程：自动生成评测集 -> 跑检索与生成 -> 算指标 -> 结果存成 JSON 文件。
+样本数、是否跑 RAGAS 都可在 .env 配置（EVAL_SIZE / EVAL_USE_RAGAS）。
 """
 
 import json
 import random
+import sys
+import types
 import uuid
-from pathlib import Path
 from typing import Any
 
 from langchain_core.documents import Document
@@ -24,6 +26,22 @@ GEN_PROMPT = """基于下面这段文档内容，生成 1 个问答对，用于�
 文档内容：
 {content}
 """
+
+
+def _ensure_ragas_compat() -> None:
+    """兼容补丁（可删）：ragas 仍会 import langchain_community.chat_models.vertexai，
+    而该模块在 langchain-community 0.4 中已移除。这里注册一个空模块占位，避免导入失败。
+    """
+    name = "langchain_community.chat_models.vertexai"
+    if name in sys.modules:
+        return
+    try:
+        __import__(name)
+        return
+    except ImportError:
+        module = types.ModuleType(name)
+        module.ChatVertexAI = type("ChatVertexAI", (), {})  # 占位类，不会被真正调用
+        sys.modules[name] = module
 
 
 def generate_samples(collection: str, size: int, settings: Settings | None = None) -> list[dict]:
@@ -68,20 +86,21 @@ def _parse_json(text: str) -> dict:
 
 
 def _ragas_scores(rows: list[dict], settings: Settings) -> dict:
-    """调用 RAGAS：忠实度 / 答案相关性 / 上下文召回 / 上下文精确率。"""
+    """RAGAS 0.4：忠实度 / 答案相关性 / 上下文召回 / 上下文精确率。"""
     if not settings.openai_api_key:
         return {"ragas_error": "未配置 OPENAI_API_KEY，跳过 RAGAS（仍会输出检索指标）"}
     try:
+        _ensure_ragas_compat()
         from langchain_openai import ChatOpenAI, OpenAIEmbeddings
         from ragas import evaluate
         from ragas.dataset_schema import EvaluationDataset, SingleTurnSample
         from ragas.embeddings import LangchainEmbeddingsWrapper
         from ragas.llms import LangchainLLMWrapper
-        from ragas.metrics import (
-            Faithfulness,
-            LLMContextPrecisionWithReference,
-            LLMContextRecall,
-            ResponseRelevancy,
+        from ragas.metrics.collections import (
+            AnswerRelevancy,          # 答案相关性
+            ContextPrecisionWithReference,  # 上下文精确率
+            ContextRecall,            # 上下文召回
+            Faithfulness,             # 忠实度
         )
     except Exception as exc:
         return {"ragas_error": f"RAGAS 依赖不可用：{exc}"}
@@ -99,16 +118,23 @@ def _ragas_scores(rows: list[dict], settings: Settings) -> dict:
             ]
         )
         judge_llm = LangchainLLMWrapper(
-            ChatOpenAI(model=settings.llm_model, api_key=settings.openai_api_key,
-                       base_url=settings.openai_base_url, temperature=0)
+            ChatOpenAI(
+                model=settings.llm_model,
+                api_key=settings.openai_api_key,
+                base_url=settings.openai_base_url,
+                temperature=0,
+            )
         )
         judge_emb = LangchainEmbeddingsWrapper(
-            OpenAIEmbeddings(model=settings.embedding_model, api_key=settings.openai_api_key,
-                             base_url=settings.openai_base_url)
+            OpenAIEmbeddings(
+                model=settings.embedding_model,
+                api_key=settings.openai_api_key,
+                base_url=settings.openai_base_url,
+            )
         )
         result = evaluate(
             dataset,
-            metrics=[Faithfulness(), ResponseRelevancy(), LLMContextRecall(), LLMContextPrecisionWithReference()],
+            metrics=[Faithfulness(), AnswerRelevancy(), ContextRecall(), ContextPrecisionWithReference()],
             llm=judge_llm,
             embeddings=judge_emb,
         )
@@ -117,20 +143,23 @@ def _ragas_scores(rows: list[dict], settings: Settings) -> dict:
 
     try:
         df = result.to_pandas()
-        return {f"ragas_{col}": round(float(df[col].mean()), 4) for col in df.columns if col != "user_input"}
+        numeric = [c for c in df.columns if df[c].dtype.kind in "fi"]
+        return {f"ragas_{col}": round(float(df[col].mean()), 4) for col in numeric}
     except Exception:
         return {"ragas_error": "RAGAS 结果解析失败"}
 
 
 def run_evaluation(
     collection: str,
-    size: int = 20,
-    use_ragas: bool = True,
+    size: int | None = None,
+    use_ragas: bool | None = None,
     settings: Settings | None = None,
     run_id: str | None = None,
 ) -> dict:
     """执行一次评测，结果写入 data/eval/run_<id>.json（后台任务与 CLI 共用）。"""
     s = settings or get_settings()
+    size = size or s.eval_size
+    use_ragas = s.eval_use_ragas if use_ragas is None else use_ragas
     run_id = run_id or uuid.uuid4().hex[:12]
     _save(run_id, {"id": run_id, "status": "running", "collection": collection})
     try:
@@ -146,9 +175,11 @@ def run_evaluation(
             hits += int(hit)
             mrr_sum += 1.0 / (ids.index(gold) + 1) if hit else 0.0
 
-            gen = answer(sample["question"], collection, settings=s) if s.openai_api_key else {
-                "answer": "", "contexts": [d.page_content for d in docs]
-            }
+            gen = (
+                answer(sample["question"], collection, settings=s)
+                if s.openai_api_key
+                else {"answer": "", "contexts": [d.page_content for d in docs]}
+            )
             rows.append(
                 {
                     "question": sample["question"],
